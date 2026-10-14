@@ -288,7 +288,7 @@ class LogHelper: NSObject {
                                          ignoreCase: Bool) throws -> (hasMatches: Bool, filteredLogs: URL) {
         // Matching entries are written to a temporary directory, which is then zipped like the regular export
         let fm = FileManager.default
-        let filteredDirURL = fm.temporaryDirectory.appendingPathComponent("FilteredLogs-\(UUID().uuidString)")
+        let filteredDirURL = fm.temporaryDirectory.appendingPathComponent("filtered_logs_\(UUID().uuidString)")
 
         var hasMatches = false
         do {
