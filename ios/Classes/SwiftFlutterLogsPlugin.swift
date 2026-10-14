@@ -72,8 +72,25 @@ public class SwiftFlutterLogsPlugin: NSObject, FlutterPlugin {
             }
         }else if call.method == "exportLogs" {
             LogHelper.getFiles(result:result,eventSink:eventSink, channel:SwiftFlutterLogsPlugin.channel)
+        }else if call.method == "exportFilteredLogs" {
+            if let myArgs = call.arguments as? [String: Any],
+               let keywords = myArgs["keywords"] as? String,
+               let filterType = myArgs["filterType"] as? String,
+               let ignoreCase = myArgs["ignoreCase"] as? Bool
+            {
+                LogHelper.exportFilteredLogs(result:result,
+                                             keywords:keywords.components(separatedBy: ","),
+                                             filterType:filterType,
+                                             ignoreCase:ignoreCase,
+                                             exportType:myArgs["exportType"] as? String,
+                                             decryptBeforeExporting:myArgs["decryptBeforeExporting"] as? Bool ?? false,
+                                             eventSink:eventSink,
+                                             channel:SwiftFlutterLogsPlugin.channel)
+            } else {
+                result("iOS could not extract flutter arguments in method: (exportFilteredLogs)")
+            }
         }else if call.method == "exportFileLogForName" {
-            
+
         }else if call.method == "clearLogs" {
             LogHelper.clearLogs(result:result)
             result("Logs are cleared.")

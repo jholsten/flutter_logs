@@ -13,7 +13,7 @@ class LogHelper: NSObject {
     
     //MARK: constants
     static let sharedInstance = LogHelper()
-    
+
     static var logFilePath: String {
         return ""
     }
@@ -104,6 +104,51 @@ class LogHelper: NSObject {
         }
     }
     
+    static func exportFilteredLogs(result: @escaping FlutterResult,
+                                   keywords: [String],
+                                   filterType: String,
+                                   ignoreCase: Bool,
+                                   exportType: String?,
+                                   decryptBeforeExporting: Bool,
+                                   eventSink: FlutterEventSink?,
+                                   channel: FlutterMethodChannel?){
+        if let exportType = exportType, exportType != "ALL" {
+            print("{\(TAG)} {exportFilteredLogs} {Warning: exportType '\(exportType)' is not supported on iOS and will be ignored. All logs are filtered.} {\(getTimeStamp())}")
+        }
+        if decryptBeforeExporting {
+            print("{\(TAG)} {exportFilteredLogs} {Warning: decryptBeforeExporting has no effect on iOS, logs are not encrypted.} {\(getTimeStamp())}")
+        }
+
+        let keywords = keywords.filter { !$0.isEmpty }
+        if keywords.isEmpty {
+            result("{\(TAG)} {exportFilteredLogs} {No keywords given!} {\(getTimeStamp())}")
+            return
+        }
+
+        guard let files = Logging.fileURLs, !files.isEmpty else {
+            result("{\(TAG)} {exportFilteredLogs} {No Files found!} {\(getTimeStamp())}")
+            return
+        }
+
+        let filtered: (hasMatches: Bool, filteredLogs: URL)
+        do {
+            filtered = try findFilteredLogs(files: files, keywords: keywords, filterType: filterType, ignoreCase: ignoreCase)
+        } catch {
+            print(error)
+            result("{\(TAG)} {exportFilteredLogs} {Unable to write filtered logs!} {\(getTimeStamp())}")
+            return
+        }
+        
+        defer { try? FileManager.default.removeItem(at: filtered.filteredLogs) }
+
+        if !filtered.hasMatches {
+            result("{\(TAG)} {exportFilteredLogs} {No matching logs found!} {\(getTimeStamp())}")
+            return
+        }
+
+        zipLogs(result: result, zipName: "filtered_logs", sourceDirectoryURL: filtered.filteredLogs, eventSink:eventSink, channel:channel)
+    }
+
     static func printLogs(result: @escaping FlutterResult,eventSink: FlutterEventSink?,channel : FlutterMethodChannel?){
         
         guard let files = Logging.fileURLs  else {
@@ -181,11 +226,11 @@ class LogHelper: NSObject {
         return dateFormatter().string(from: Date())
     }
     
-    static func zipLogs(result: @escaping FlutterResult, zipName:String,eventSink: FlutterEventSink?,channel : FlutterMethodChannel?) {
-        
+    static func zipLogs(result: @escaping FlutterResult, zipName:String, sourceDirectoryURL: URL? = Logging.defaultLogsDirectoryURL(), eventSink: FlutterEventSink?,channel : FlutterMethodChannel?) {
+
         let  path = NSSearchPathForDirectoriesInDomains(.documentDirectory,.userDomainMask,true).first!
-        
-        guard var sourceURL = Logging.defaultLogsDirectoryURL()  else {
+
+        guard var sourceURL = sourceDirectoryURL  else {
             print("{\(TAG)} {zipData} {Dir not found!} {\(getTimeStamp())}")
             result("{\(TAG)} {zipData} {Dir not found!} {\(getTimeStamp())}")
             return
@@ -229,5 +274,54 @@ class LogHelper: NSObject {
             print("{\(TAG)} {zipLogs} {No Files found!} {\(getTimeStamp())}")
             result("{\(TAG)} {zipLogs} {No Files found!} {\(getTimeStamp())}")
         }
+    }
+
+    /// Writes all log lines containing the keywords to a temporary directory.
+    /// The caller is responsible for removing the returned directory.
+    private static func findFilteredLogs(files: [URL],
+                                         keywords: [String],
+                                         filterType: String,
+                                         ignoreCase: Bool) throws -> (hasMatches: Bool, filteredLogs: URL) {
+        // Matching lines are written to a temporary directory, which is then zipped like the regular export
+        let fm = FileManager.default
+        let filteredDirURL = fm.temporaryDirectory.appendingPathComponent("FilteredLogs-\(UUID().uuidString)")
+
+        var hasMatches = false
+        do {
+            try fm.createDirectory(at: filteredDirURL, withIntermediateDirectories: true, attributes: nil)
+
+            for fileURL in files {
+                guard let text = try? String(contentsOf: fileURL, encoding: .utf8) else {
+                    print("{\(TAG)} {exportFilteredLogs} {Unable to read file. \(fileURL)} {\(getTimeStamp())}")
+                    continue
+                }
+
+                let matchingLines = text.components(separatedBy: .newlines).filter({ logLineMatches(line: $0, keywords: keywords, filterType: filterType, ignoreCase: ignoreCase) })
+                if matchingLines.isEmpty {
+                    continue
+                }
+
+                hasMatches = true
+                let filteredText = matchingLines.joined(separator: "\n") + "\n"
+                try filteredText.write(to: filteredDirURL.appendingPathComponent(fileURL.lastPathComponent), atomically: true, encoding: .utf8)
+            }
+        } catch {
+            try? fm.removeItem(at: filteredDirURL)
+            throw error
+        }
+
+        return (hasMatches, filteredDirURL)
+    }
+    
+    private static func logLineMatches(line: String,
+                                       keywords: [String],
+                                       filterType: String,
+                                       ignoreCase: Bool) -> Bool {
+        let matchesFilter = { (keyword: String) -> Bool in
+            line.range(of: keyword, options: ignoreCase ? .caseInsensitive : []) != nil
+        }
+        return filterType == "AND"
+                ? keywords.allSatisfy(matchesFilter)
+                : keywords.contains(where: matchesFilter)
     }
 }
