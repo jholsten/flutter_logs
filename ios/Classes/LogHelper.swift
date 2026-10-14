@@ -14,6 +14,10 @@ class LogHelper: NSObject {
     //MARK: constants
     static let sharedInstance = LogHelper()
 
+    /// Matches the timestamp written by `prefix()` at the start of each log entry,
+    /// e.g. "2026-10-14 10:00:00.123 +0200: {tag} {subTag} {logMessage} {level}".
+    private static let logEntryStartRegex = try! NSRegularExpression(pattern: "^\\d+-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d{3}: ")
+
     static var logFilePath: String {
         return ""
     }
@@ -276,13 +280,13 @@ class LogHelper: NSObject {
         }
     }
 
-    /// Writes all log lines containing the keywords to a temporary directory.
+    /// Writes all log entries containing the keywords to a temporary directory.
     /// The caller is responsible for removing the returned directory.
     private static func findFilteredLogs(files: [URL],
                                          keywords: [String],
                                          filterType: String,
                                          ignoreCase: Bool) throws -> (hasMatches: Bool, filteredLogs: URL) {
-        // Matching lines are written to a temporary directory, which is then zipped like the regular export
+        // Matching entries are written to a temporary directory, which is then zipped like the regular export
         let fm = FileManager.default
         let filteredDirURL = fm.temporaryDirectory.appendingPathComponent("FilteredLogs-\(UUID().uuidString)")
 
@@ -296,13 +300,13 @@ class LogHelper: NSObject {
                     continue
                 }
 
-                let matchingLines = text.components(separatedBy: .newlines).filter({ logLineMatches(line: $0, keywords: keywords, filterType: filterType, ignoreCase: ignoreCase) })
-                if matchingLines.isEmpty {
+                let matchingEntries = logEntries(in: text).filter({ logEntryMatches(entry: $0, keywords: keywords, filterType: filterType, ignoreCase: ignoreCase) })
+                if matchingEntries.isEmpty {
                     continue
                 }
 
                 hasMatches = true
-                let filteredText = matchingLines.joined(separator: "\n") + "\n"
+                let filteredText = matchingEntries.joined(separator: "\n") + "\n"
                 try filteredText.write(to: filteredDirURL.appendingPathComponent(fileURL.lastPathComponent), atomically: true, encoding: .utf8)
             }
         } catch {
@@ -313,12 +317,36 @@ class LogHelper: NSObject {
         return (hasMatches, filteredDirURL)
     }
     
-    private static func logLineMatches(line: String,
-                                       keywords: [String],
-                                       filterType: String,
-                                       ignoreCase: Bool) -> Bool {
+    /// Splits the log text into entries. An entry starts with a timestamp and includes all
+    /// following lines without a timestamp (e.g. stack traces) up to the next entry.
+    private static func logEntries(in text: String) -> [String] {
+        var entries: [String] = []
+        var currentEntryLines: [String] = []
+
+        text.enumerateLines { line, _ in
+            if isLogEntryStart(line), !currentEntryLines.isEmpty {
+                entries.append(currentEntryLines.joined(separator: "\n"))
+                currentEntryLines = []
+            }
+            currentEntryLines.append(line)
+        }
+
+        if !currentEntryLines.isEmpty {
+            entries.append(currentEntryLines.joined(separator: "\n"))
+        }
+        return entries
+    }
+
+    private static func isLogEntryStart(_ line: String) -> Bool {
+        return logEntryStartRegex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) != nil
+    }
+
+    private static func logEntryMatches(entry: String,
+                                        keywords: [String],
+                                        filterType: String,
+                                        ignoreCase: Bool) -> Bool {
         let matchesFilter = { (keyword: String) -> Bool in
-            line.range(of: keyword, options: ignoreCase ? .caseInsensitive : []) != nil
+            entry.range(of: keyword, options: ignoreCase ? .caseInsensitive : []) != nil
         }
         return filterType == "AND"
                 ? keywords.allSatisfy(matchesFilter)
